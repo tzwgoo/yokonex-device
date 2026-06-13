@@ -1,9 +1,8 @@
 # yokonex-device
 
-`yokonex-device` 是一个面向 YOKONEX 设备的独立 Python SDK，提供蓝牙扫描、连接、波形管理、波形执行和实时遥测能力。
+`yokonex-device` 是一个面向 YOKONEX 设备的独立 Python SDK，提供蓝牙扫描、连接管理、设备状态读取、波形管理、波形执行与实时遥测能力。
 
 GitHub 仓库：
-
 - [tzwgoo/yokonex-device](https://github.com/tzwgoo/yokonex-device)
 
 ## 适用场景
@@ -28,21 +27,28 @@ SDK 当前负责这些设备层能力：
 - overlay 遥测数据输出
 - 设备配置与波形配置持久化
 
-## 不负责的内容
-
-这个 SDK 刻意不处理业务层规则，以下能力应放在上层应用：
-
-- 礼物档位
-- 价格区间映射
-- 弹幕关键词匹配
-- 直播事件分发
-- OBS 最近事件聚合展示
-
-推荐做法是：
+推荐接入方式：
 
 1. 上层项目先完成业务事件匹配。
 2. 上层项目得到目标波形 ID。
 3. 上层项目调用 `yokonex-device` 执行目标波形。
+
+## 当前支持的设备范围
+
+当前版本的识别与控制能力来自已有运行时协议适配，已支持以下设备类型：
+
+| 设备类型 | 识别方式 | 协议 |
+| --- | --- | --- |
+| EMS V1 | 设备名以 `YYC-DJ-` 开头 | `ems_v1` |
+| EMS V2 | 设备名以 `YYC-DJ-V2-` 开头 | `ems_v2` |
+| Toy | 设备名以 `YCY-FJB`、`YCY-TDD` 开头，或广播出服务 UUID `0000ff40-0000-1000-8000-00805f9b34fb` | `toy` |
+| GCQ Toy / 灌肠机 | 广播出服务 UUID `0000ff70-0000-1000-8000-00805f9b34fb` | `yiskj_gcq_toy_013` |
+
+补充说明：
+
+- 运行时会先基于广播名称和服务 UUID 进行初步识别。
+- 在连接后，如果读取到更准确的 GATT 服务信息，运行时会重新修正设备分类。
+- 不在以上范围内的设备目前不保证可直接使用，通常需要补充新的协议适配。
 
 ## 仓库结构
 
@@ -192,8 +198,8 @@ python -m twine upload dist/*
 
 发布方式：
 
-1. 更新 `pyproject.toml` 里的版本号
-2. 提交并推送代码
+1. 更新 `pyproject.toml` 里的版本号。
+2. 提交并推送代码。
 3. 打 tag，例如：
 
 ```bash
@@ -201,7 +207,7 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-工作流会先测试、再构建、最后通过 PyPI Trusted Publisher 发布。
+工作流会先测试、再构建，最后通过 PyPI Trusted Publisher 发布。
 
 ## 许可证
 
