@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yokonex-device"
+version = "0.1.0"
+description = "YOKONEX 设备扫描、连接、波形执行与状态输出依赖"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "bleak>=1.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2.0",
+  "pytest>=8.0.0",
+  "anyio>=4.0.0",
+  "twine>=5.0.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["yokonex_device*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
