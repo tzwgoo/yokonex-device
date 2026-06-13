@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yokonex-device"
-version = "0.1.0"
+version = "0.2.0"
 description = "YOKONEX 设备扫描、连接、波形执行与状态输出依赖"
 readme = "README.md"
 requires-python = ">=3.12"
