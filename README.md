@@ -114,6 +114,20 @@ python -m pytest
 python -m twine upload dist/*
 ```
 
+也可以直接使用仓库内置的 GitHub Actions 发布工作流：
+
+- 给仓库打 tag，例如 `v0.1.1`
+- 推送 tag 到 GitHub
+- 工作流会先测试、构建，再通过 PyPI Trusted Publisher 发布
+
+首次使用前需要在 PyPI 项目后台配置 Trusted Publisher，绑定：
+
+- owner: `tzwgoo`
+- repo: `yokonex-device`
+- workflow: `.github/workflows/publish.yml`
+
+如果只想手动触发构建和发布，也可以在 GitHub Actions 页面使用 `workflow_dispatch`。
+
 ## 与主仓库的关系
 
 这个目录是从 `Bililive-YOKONEX` 中拆出的独立仓库骨架，适合作为新仓库初始化起点：

@@ -8,9 +8,26 @@ version = "0.1.0"
 description = "YOKONEX 设备扫描、连接、波形执行与状态输出依赖"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [
+  { name = "tzwgoo", email = "tzwgoo@163.com" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: Microsoft :: Windows",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "bleak>=1.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/tzwgoo/yokonex-device"
+Repository = "https://github.com/tzwgoo/yokonex-device"
+Issues = "https://github.com/tzwgoo/yokonex-device/issues"
 
 [project.optional-dependencies]
 dev = [
