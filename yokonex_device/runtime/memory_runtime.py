@@ -43,6 +43,11 @@ class MemoryBluetoothRuntime:
                 protocol="toy",
                 rssi=-38,
                 connected="toy-demo-001" in self._connected_device_ids,
+                product_id=1,
+                product_version=1,
+                motor_a_mode_count=5,
+                motor_b_mode_count=5,
+                motor_c_mode_count=0,
             ),
             BluetoothDevice(
                 device_id="gcq-toy-demo-001",
@@ -51,6 +56,14 @@ class MemoryBluetoothRuntime:
                 protocol="yiskj_gcq_toy_013",
                 rssi=-36,
                 connected="gcq-toy-demo-001" in self._connected_device_ids,
+            ),
+            BluetoothDevice(
+                device_id="gcq-aes-demo-001",
+                name="YISKJ-GCQ-AES-DEMO",
+                device_type="toy",
+                protocol="yiskj_gcq_v1_aes",
+                rssi=-37,
+                connected="gcq-aes-demo-001" in self._connected_device_ids,
             ),
         ]
         return list(self._devices)
@@ -67,7 +80,13 @@ class MemoryBluetoothRuntime:
             connected=True,
             device_name=device.name,
             device_type=device.device_type,
+            protocol=device.protocol,
             battery_level=self._battery_levels[device_id],
+            product_id=device.product_id,
+            product_version=device.product_version,
+            motor_a_mode_count=device.motor_a_mode_count,
+            motor_b_mode_count=device.motor_b_mode_count,
+            motor_c_mode_count=device.motor_c_mode_count,
         )
         return BluetoothConnectionStatus(
             connected=True,
@@ -146,6 +165,9 @@ class MemoryBluetoothRuntime:
                         "motor_a": toy_step.motor_a,
                         "motor_b": toy_step.motor_b,
                         "motor_c": toy_step.motor_c,
+                        "control_mode": toy_step.control_mode,
+                        "fixed_mode": toy_step.fixed_mode,
+                        "motor_mask": toy_step.motor_mask,
                     }
                 )
                 self._set_overlay_payload(
@@ -153,14 +175,23 @@ class MemoryBluetoothRuntime:
                     connected=True,
                     device_name=device.name,
                     device_type=device.device_type,
+                    protocol=device.protocol,
                     waveform_name=waveform.name,
                     battery_level=self._battery_levels.get(resolved_device_id),
                     motor_a=toy_step.motor_a,
                     motor_b=toy_step.motor_b,
                     motor_c=toy_step.motor_c,
+                    control_mode=toy_step.control_mode,
+                    fixed_mode=toy_step.fixed_mode,
+                    motor_mask=toy_step.motor_mask,
                     step_index=index,
                     step_count=len(waveform.steps),
                     history=history[-90:],
+                    product_id=device.product_id,
+                    product_version=device.product_version,
+                    motor_a_mode_count=device.motor_a_mode_count,
+                    motor_b_mode_count=device.motor_b_mode_count,
+                    motor_c_mode_count=device.motor_c_mode_count,
                 )
                 continue
 
@@ -175,6 +206,7 @@ class MemoryBluetoothRuntime:
                 connected=True,
                 device_name=device.name,
                 device_type=device.device_type,
+                protocol=device.protocol,
                 waveform_name=waveform.name,
                 battery_level=self._battery_levels.get(resolved_device_id),
                 channel_a=getattr(step, "channel_a", 0),
@@ -182,6 +214,11 @@ class MemoryBluetoothRuntime:
                 step_index=index,
                 step_count=len(waveform.steps),
                 history=history[-90:],
+                product_id=device.product_id,
+                product_version=device.product_version,
+                motor_a_mode_count=device.motor_a_mode_count,
+                motor_b_mode_count=device.motor_b_mode_count,
+                motor_c_mode_count=device.motor_c_mode_count,
             )
 
         if is_toy_device:
@@ -190,14 +227,23 @@ class MemoryBluetoothRuntime:
                 connected=True,
                 device_name=device.name,
                 device_type=device.device_type,
+                protocol=device.protocol,
                 waveform_name="",
                 battery_level=self._battery_levels.get(resolved_device_id),
                 motor_a=0,
                 motor_b=0,
                 motor_c=0,
+                control_mode="",
+                fixed_mode=0,
+                motor_mask=0,
                 step_index=0,
                 step_count=0,
                 history=[*history[-90:], {"motor_a": 0, "motor_b": 0, "motor_c": 0}][-90:],
+                product_id=device.product_id,
+                product_version=device.product_version,
+                motor_a_mode_count=device.motor_a_mode_count,
+                motor_b_mode_count=device.motor_b_mode_count,
+                motor_c_mode_count=device.motor_c_mode_count,
             )
         else:
             self._set_overlay_payload(
@@ -205,6 +251,7 @@ class MemoryBluetoothRuntime:
                 connected=True,
                 device_name=device.name,
                 device_type=device.device_type,
+                protocol=device.protocol,
                 waveform_name="",
                 battery_level=self._battery_levels.get(resolved_device_id),
                 channel_a=0,
@@ -212,6 +259,11 @@ class MemoryBluetoothRuntime:
                 step_index=0,
                 step_count=0,
                 history=[*history[-90:], {"channel_a": 0, "channel_b": 0}][-90:],
+                product_id=device.product_id,
+                product_version=device.product_version,
+                motor_a_mode_count=device.motor_a_mode_count,
+                motor_b_mode_count=device.motor_b_mode_count,
+                motor_c_mode_count=device.motor_c_mode_count,
             )
         return None
 
@@ -249,8 +301,19 @@ class MemoryBluetoothRuntime:
             "connected": False,
             "device_name": "",
             "device_type": "",
+            "protocol": "",
+            "product_id": None,
+            "product_version": None,
+            "motor_a_mode_count": 0,
+            "motor_b_mode_count": 0,
+            "motor_c_mode_count": 0,
             "waveform_name": "",
             "battery_level": None,
+            "control_mode": "",
+            "fixed_mode": 0,
+            "motor_mask": 0,
+            "pressure_a": 0,
+            "pressure_b": 0,
             "channel_a": 0,
             "channel_b": 0,
             "motor_a": 0,

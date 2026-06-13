@@ -80,6 +80,7 @@ service.get_overlay_payload()
 service.create_waveform(name="我的波形")
 service.create_waveform(name="Toy 波形", device_type="toy")
 service.create_waveform(name="GCQ 波形", device_type="gcq")
+service.create_waveform(name="GCQ AES 波形", device_type="gcq_aes")
 ```
 
 ### 编辑波形
@@ -122,7 +123,78 @@ await service.trigger_waveforms(
 )
 ```
 
-## 4. 推荐集成方式
+## 4. 当前设备协议说明
+
+### EMS
+
+- `YYC-DJ-*` -> `ems_v1`
+- `YYC-DJ-V2-*` -> `ems_v2`
+
+### Toy
+
+- 服务 UUID：`FF40 / FF41 / FF42`
+- 普通实时速率控制：`0x12`
+- 固定模式控制：`0x11`
+- 设备信息查询：`0x10`
+
+### GCQ Toy
+
+- 服务 UUID：`FF70 / FF71 / FF72`
+- 协议：`yiskj_gcq_toy_013`
+- 当前波形语义：
+  - `motor_a`: 气阀开关，`0/1`
+  - `motor_b`: 气泵档位，`0-5`
+  - `motor_c`: 水泵档位，`0-5`
+
+### GCQ AES
+
+- 服务 UUID：`FFB0 / FFB1 / FFB2`
+- 协议：`yiskj_gcq_v1_aes`
+- 加密方式：`AES-128-ECB`
+- 当前波形语义：
+  - `motor_a`: 蠕动泵状态，`0=停止`、`1=正转`、`2=反转`
+  - `motor_b`: 抽水泵状态，`0=停止`、`1=正转`
+  - `motor_c`: 预留
+- 当前接入的协议指令：
+  - `A0 01` 控制蠕动泵
+  - `A0 02` 控制抽水泵
+  - `A0 03` 暂停工作
+  - `A0 04` 查询工作状态
+  - `A0 05` 查询电量
+  - `B0 01` 解析工作状态上报
+  - `B0 02` 解析压力值上报
+  - `B0 03` 解析电量上报
+
+GCQ AES 示例：
+
+```python
+created = service.create_waveform(name="GCQ AES 波形", device_type="gcq_aes")
+
+service.update_waveform(
+    waveform_id=created["waveform"]["id"],
+    name="双泵联动",
+    steps=[
+        {"duration_ms": 2000, "motor_a": 1, "motor_b": 1, "motor_c": 0},
+        {"duration_ms": 1000, "motor_a": 2, "motor_b": 0, "motor_c": 0},
+    ],
+)
+```
+
+连接后可从状态接口读取这套协议补充出来的字段：
+
+```python
+status_payload = service.get_status_payload()
+overlay_payload = service.get_overlay_payload()
+```
+
+重点字段包括：
+
+- `device.protocol`
+- `overlay_payload["pressure_a"]`
+- `overlay_payload["pressure_b"]`
+- `overlay_payload["battery_level"]`
+
+## 5. 推荐集成方式
 
 推荐由上层业务仓库包装一个应用服务：
 

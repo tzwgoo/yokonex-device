@@ -326,6 +326,11 @@ class BluetoothService:
                 "device_type": primary_status.device.device_type,
                 "protocol": primary_status.device.protocol,
                 "rssi": primary_status.device.rssi,
+                "product_id": primary_status.device.product_id,
+                "product_version": primary_status.device.product_version,
+                "motor_a_mode_count": primary_status.device.motor_a_mode_count,
+                "motor_b_mode_count": primary_status.device.motor_b_mode_count,
+                "motor_c_mode_count": primary_status.device.motor_c_mode_count,
             },
             "devices": [
                 self._build_device_status_payload(item)
@@ -367,6 +372,17 @@ class BluetoothService:
                 or ("" if status.device is None else status.device.protocol)
                 or ""
             ),
+            "product_id": payload.get("product_id", None if status.device is None else status.device.product_id),
+            "product_version": payload.get("product_version", None if status.device is None else status.device.product_version),
+            "motor_a_mode_count": int(
+                payload.get("motor_a_mode_count", 0 if status.device is None else status.device.motor_a_mode_count) or 0
+            ),
+            "motor_b_mode_count": int(
+                payload.get("motor_b_mode_count", 0 if status.device is None else status.device.motor_b_mode_count) or 0
+            ),
+            "motor_c_mode_count": int(
+                payload.get("motor_c_mode_count", 0 if status.device is None else status.device.motor_c_mode_count) or 0
+            ),
             "waveform_name": str(payload.get("waveform_name", "") or ""),
             "battery_level": _normalize_battery_level(
                 payload.get("battery_level", status.battery_level),
@@ -375,12 +391,17 @@ class BluetoothService:
                 payload=payload,
                 active_waveform_strength=active_strength,
             ),
+            "control_mode": str(payload.get("control_mode", "") or ""),
+            "fixed_mode": max(0, int(payload.get("fixed_mode", 0) or 0)),
+            "motor_mask": max(0, int(payload.get("motor_mask", 0) or 0)),
             "devices": overlay_devices,
             "channel_a": max(0, int(payload.get("channel_a", 0) or 0)),
             "channel_b": max(0, int(payload.get("channel_b", 0) or 0)),
             "motor_a": max(0, int(payload.get("motor_a", 0) or 0)),
             "motor_b": max(0, int(payload.get("motor_b", 0) or 0)),
             "motor_c": max(0, int(payload.get("motor_c", 0) or 0)),
+            "pressure_a": max(0, int(payload.get("pressure_a", 0) or 0)),
+            "pressure_b": max(0, int(payload.get("pressure_b", 0) or 0)),
             "step_index": max(0, int(payload.get("step_index", 0) or 0)),
             "step_count": max(0, int(payload.get("step_count", 0) or 0)),
             "updated_at": float(payload.get("updated_at", 0) or 0),
@@ -392,6 +413,11 @@ class BluetoothService:
                     "motor_a": max(0, int(item.get("motor_a", 0) or 0)),
                     "motor_b": max(0, int(item.get("motor_b", 0) or 0)),
                     "motor_c": max(0, int(item.get("motor_c", 0) or 0)),
+                    "pressure_a": max(0, int(item.get("pressure_a", 0) or 0)),
+                    "pressure_b": max(0, int(item.get("pressure_b", 0) or 0)),
+                    "control_mode": str(item.get("control_mode", "") or ""),
+                    "fixed_mode": max(0, int(item.get("fixed_mode", 0) or 0)),
+                    "motor_mask": max(0, int(item.get("motor_mask", 0) or 0)),
                 }
                 for item in payload.get("history", [])
                 if isinstance(item, dict)
@@ -407,15 +433,15 @@ class BluetoothService:
         }
 
     def create_waveform(self, *, name: str, device_type: str = "ems") -> dict:
-        if device_type in {"toy", "gcq"}:
+        if device_type in {"toy", "gcq", "gcq_aes"}:
             waveform = ToyWaveform(
                 id=_generate_custom_waveform_id(self.payload),
                 name=str(name or "").strip() or "自定义波形",
                 builtin=False,
                 editable=True,
-                device_family="gcq" if device_type == "gcq" else "toy",
+                device_family="gcq_aes" if device_type == "gcq_aes" else ("gcq" if device_type == "gcq" else "toy"),
                 loop_count=1,
-                steps=[ToyWaveformStep(duration_ms=200, motor_a=0, motor_b=0, motor_c=0)],
+                steps=[ToyWaveformStep(duration_ms=200, motor_a=0, motor_b=0, motor_c=0, control_mode="speed", fixed_mode=0, motor_mask=0)],
             )
             self.payload.toy_waveforms.insert(0, waveform)
         else:
@@ -618,6 +644,11 @@ class BluetoothService:
             "protocol": device.protocol,
             "rssi": device.rssi,
             "connected": device.connected,
+            "product_id": device.product_id,
+            "product_version": device.product_version,
+            "motor_a_mode_count": device.motor_a_mode_count,
+            "motor_b_mode_count": device.motor_b_mode_count,
+            "motor_c_mode_count": device.motor_c_mode_count,
             "battery_level": status.battery_level,
             "active_waveform_id": "" if active_state is None else active_state.waveform_id,
             "active_waveform_strength": -1 if active_state is None else active_state.strength,
@@ -633,6 +664,11 @@ class BluetoothService:
             "device_name": str(payload.get("device_name", device.name) or device.name),
             "device_type": str(payload.get("device_type", device.device_type) or device.device_type),
             "protocol": str(payload.get("protocol", device.protocol) or device.protocol),
+            "product_id": payload.get("product_id", device.product_id),
+            "product_version": payload.get("product_version", device.product_version),
+            "motor_a_mode_count": int(payload.get("motor_a_mode_count", device.motor_a_mode_count) or 0),
+            "motor_b_mode_count": int(payload.get("motor_b_mode_count", device.motor_b_mode_count) or 0),
+            "motor_c_mode_count": int(payload.get("motor_c_mode_count", device.motor_c_mode_count) or 0),
             "waveform_name": str(payload.get("waveform_name", "") or ""),
             "battery_level": _normalize_battery_level(
                 payload.get("battery_level", status.battery_level),
@@ -641,11 +677,16 @@ class BluetoothService:
                 payload=payload,
                 active_waveform_strength=active_strength,
             ),
+            "control_mode": str(payload.get("control_mode", "") or ""),
+            "fixed_mode": max(0, int(payload.get("fixed_mode", 0) or 0)),
+            "motor_mask": max(0, int(payload.get("motor_mask", 0) or 0)),
             "channel_a": max(0, int(payload.get("channel_a", 0) or 0)),
             "channel_b": max(0, int(payload.get("channel_b", 0) or 0)),
             "motor_a": max(0, int(payload.get("motor_a", 0) or 0)),
             "motor_b": max(0, int(payload.get("motor_b", 0) or 0)),
             "motor_c": max(0, int(payload.get("motor_c", 0) or 0)),
+            "pressure_a": max(0, int(payload.get("pressure_a", 0) or 0)),
+            "pressure_b": max(0, int(payload.get("pressure_b", 0) or 0)),
             "step_index": max(0, int(payload.get("step_index", 0) or 0)),
             "step_count": max(0, int(payload.get("step_count", 0) or 0)),
             "updated_at": float(payload.get("updated_at", 0) or 0),
@@ -659,6 +700,11 @@ class BluetoothService:
                     "motor_a": max(0, int(item.get("motor_a", 0) or 0)),
                     "motor_b": max(0, int(item.get("motor_b", 0) or 0)),
                     "motor_c": max(0, int(item.get("motor_c", 0) or 0)),
+                    "pressure_a": max(0, int(item.get("pressure_a", 0) or 0)),
+                    "pressure_b": max(0, int(item.get("pressure_b", 0) or 0)),
+                    "control_mode": str(item.get("control_mode", "") or ""),
+                    "fixed_mode": max(0, int(item.get("fixed_mode", 0) or 0)),
+                    "motor_mask": max(0, int(item.get("motor_mask", 0) or 0)),
                 }
                 for item in payload.get("history", [])
                 if isinstance(item, dict)
@@ -760,6 +806,9 @@ def _clone_toy_waveform_step(step: ToyWaveformStep) -> ToyWaveformStep:
         motor_a=step.motor_a,
         motor_b=step.motor_b,
         motor_c=step.motor_c,
+        control_mode=step.control_mode,
+        fixed_mode=step.fixed_mode,
+        motor_mask=step.motor_mask,
     )
 
 
@@ -803,6 +852,12 @@ def _merge_toy_editable_steps(
                 motor_a=_normalize_toy_speed(step.get("motor_a", base_step.motor_a), device_family=device_family, field="motor_a"),
                 motor_b=_normalize_toy_speed(step.get("motor_b", base_step.motor_b), device_family=device_family, field="motor_b"),
                 motor_c=_normalize_toy_speed(step.get("motor_c", base_step.motor_c), device_family=device_family, field="motor_c"),
+                control_mode=_normalize_toy_control_mode(
+                    step.get("control_mode", base_step.control_mode),
+                    fixed_mode=step.get("fixed_mode", base_step.fixed_mode),
+                ),
+                fixed_mode=_normalize_toy_fixed_mode(step.get("fixed_mode", base_step.fixed_mode)),
+                motor_mask=_normalize_toy_motor_mask(step.get("motor_mask", base_step.motor_mask)),
             )
         )
     return normalized_steps
@@ -810,11 +865,34 @@ def _merge_toy_editable_steps(
 
 def _normalize_toy_speed(value: Any, *, device_family: str = "toy", field: str = "") -> int:
     normalized_family = str(device_family or "toy").lower()
+    if normalized_family == "gcq_aes":
+        if field == "motor_a":
+            return max(0, min(int(value), 2))
+        if field == "motor_b":
+            return max(0, min(int(value), 1))
+        return 0
     if normalized_family == "gcq":
         if field == "motor_a":
             return 1 if int(value) > 0 else 0
         return max(0, min(int(value), 5))
     return max(0, min(int(value), 20))
+
+
+def _normalize_toy_control_mode(value: Any, *, fixed_mode: Any = 0) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"fixed", "fixed_mode", "mode", "pattern"}:
+        return "fixed_mode"
+    if _normalize_toy_fixed_mode(fixed_mode) > 0:
+        return "fixed_mode"
+    return "speed"
+
+
+def _normalize_toy_fixed_mode(value: Any) -> int:
+    return max(0, min(int(value), 255))
+
+
+def _normalize_toy_motor_mask(value: Any) -> int:
+    return max(0, min(int(value), 0x07))
 
 
 def _normalize_waveform_strength(value: Any) -> int:
@@ -825,13 +903,18 @@ def _resolve_waveform_max_strength(waveform: EmsWaveform | ToyWaveform) -> int:
     if not waveform.steps:
         return 0
     if isinstance(waveform, ToyWaveform):
-        return max(max(step.motor_a, step.motor_b, step.motor_c) for step in waveform.steps)
+        return max(
+            max(step.motor_a, step.motor_b, step.motor_c, 20 if _normalize_toy_control_mode(step.control_mode, fixed_mode=step.fixed_mode) == "fixed_mode" and step.fixed_mode > 0 else 0)
+            for step in waveform.steps
+        )
     return max(max(step.channel_a, step.channel_b) for step in waveform.steps)
 
 
 def _resolve_overlay_display_max_strength(*, payload: dict[str, Any], active_waveform_strength: int) -> int:
     device_type = str(payload.get("device_type", "") or "").lower()
     protocol = str(payload.get("protocol", "") or "").lower()
+    if protocol == "yiskj_gcq_v1_aes":
+        return 2
     if protocol == "yiskj_gcq_toy_013":
         return 5
     if device_type in {"toy", "gcq"}:

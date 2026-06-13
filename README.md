@@ -43,12 +43,39 @@ SDK 当前负责这些设备层能力：
 | EMS V2 | 设备名以 `YYC-DJ-V2-` 开头 | `ems_v2` |
 | Toy | 设备名以 `YCY-FJB`、`YCY-TDD` 开头，或广播出服务 UUID `0000ff40-0000-1000-8000-00805f9b34fb` | `toy` |
 | GCQ Toy / 灌肠机 | 广播出服务 UUID `0000ff70-0000-1000-8000-00805f9b34fb` | `yiskj_gcq_toy_013` |
+| GCQ AES / 灌肠机一代 | 广播出服务 UUID `0000ffb0-0000-1000-8000-00805f9b34fb` | `yiskj_gcq_v1_aes` |
 
 补充说明：
 
 - 运行时会先基于广播名称和服务 UUID 进行初步识别。
 - 在连接后，如果读取到更准确的 GATT 服务信息，运行时会重新修正设备分类。
 - 不在以上范围内的设备目前不保证可直接使用，通常需要补充新的协议适配。
+
+### GCQ AES 协议补充
+
+`yiskj_gcq_v1_aes` 对应 [灌肠机一代.pdf](D:/Users/tzw66/Downloads/灌肠机一代.pdf) 里的蓝牙协议，当前 SDK 已接入以下能力：
+
+- 蓝牙服务识别：`FFB0 / FFB1 / FFB2`
+- 加密方式：`AES-128-ECB`
+- 主动查询：
+  - `A0 04` 查询工作状态
+  - `A0 05` 查询电量
+- 设备上报解析：
+  - `B0 01` 工作状态
+  - `B0 02` 压力值
+  - `B0 03` 电量
+- 控制指令：
+  - `A0 01` 蠕动泵
+  - `A0 02` 抽水泵
+  - `A0 03` 暂停工作
+
+当前 SDK 对这套协议的波形语义约定是：
+
+- `device_family="gcq_aes"`
+- `motor_a`: 蠕动泵状态，`0=停止`、`1=正转`、`2=反转`
+- `motor_b`: 抽水泵状态，`0=停止`、`1=正转`
+- `motor_c`: 预留
+- `duration_ms`: 本次控制换算后的运行时长，最终按秒下发到设备
 
 ## 仓库结构
 
@@ -101,6 +128,10 @@ pip install -e .[dev]
 pip install yokonex-device
 ```
 
+说明：
+
+- `cryptography` 已作为运行时依赖自动安装，无需单独处理 AES 依赖。
+
 ## 快速开始
 
 ### 1. 创建服务
@@ -144,6 +175,26 @@ overlay_payload = service.get_overlay_payload()
 ```
 
 更完整的接入方式见 [docs/usage.md](./docs/usage.md)。
+
+### GCQ AES 波形示例
+
+```python
+service.create_waveform(name="GCQ AES 波形", device_type="gcq_aes")
+
+service.update_waveform(
+    waveform_id="custom-wave-xxxx",
+    name="双泵测试",
+    steps=[
+        {"duration_ms": 2000, "motor_a": 1, "motor_b": 1, "motor_c": 0},
+        {"duration_ms": 1000, "motor_a": 2, "motor_b": 0, "motor_c": 0},
+    ],
+)
+```
+
+这两步分别表示：
+
+- 第 1 步：蠕动泵正转 2 秒，抽水泵正转 2 秒
+- 第 2 步：蠕动泵反转 1 秒，抽水泵停止
 
 ## 常用接口
 

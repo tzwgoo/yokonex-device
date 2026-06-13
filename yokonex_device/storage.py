@@ -143,6 +143,9 @@ def _normalize_toy_waveform(item: dict[str, Any]) -> ToyWaveform:
             motor_a=_normalize_toy_speed(step.get("motor_a", 0), device_family=device_family, field="motor_a"),
             motor_b=_normalize_toy_speed(step.get("motor_b", 0), device_family=device_family, field="motor_b"),
             motor_c=_normalize_toy_speed(step.get("motor_c", 0), device_family=device_family, field="motor_c"),
+            control_mode=_normalize_toy_control_mode(step.get("control_mode", "speed"), fixed_mode=step.get("fixed_mode", 0)),
+            fixed_mode=_normalize_toy_fixed_mode(step.get("fixed_mode", 0)),
+            motor_mask=_normalize_toy_motor_mask(step.get("motor_mask", 0)),
         )
         for step in steps
         if isinstance(step, dict)
@@ -162,6 +165,12 @@ def _normalize_toy_waveform(item: dict[str, Any]) -> ToyWaveform:
 
 def _normalize_toy_speed(value: Any, *, device_family: str = "toy", field: str = "") -> int:
     normalized_family = str(device_family or "toy").lower()
+    if normalized_family == "gcq_aes":
+        if field == "motor_a":
+            return max(0, min(int(value), 2))
+        if field == "motor_b":
+            return max(0, min(int(value), 1))
+        return 0
     if normalized_family == "gcq":
         if field == "motor_a":
             return 1 if int(value) > 0 else 0
@@ -169,8 +178,27 @@ def _normalize_toy_speed(value: Any, *, device_family: str = "toy", field: str =
     return max(0, min(int(value), 20))
 
 
+def _normalize_toy_control_mode(value: Any, *, fixed_mode: Any = 0) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"fixed", "fixed_mode", "mode", "pattern"}:
+        return "fixed_mode"
+    if _normalize_toy_fixed_mode(fixed_mode) > 0:
+        return "fixed_mode"
+    return "speed"
+
+
+def _normalize_toy_fixed_mode(value: Any) -> int:
+    return max(0, min(int(value), 255))
+
+
+def _normalize_toy_motor_mask(value: Any) -> int:
+    return max(0, min(int(value), 0x07))
+
+
 def _normalize_toy_device_family(value: Any) -> str:
     family = str(value or "toy").strip().lower()
+    if family == "gcq_aes":
+        return "gcq_aes"
     if family == "gcq":
         return "gcq"
     return "toy"

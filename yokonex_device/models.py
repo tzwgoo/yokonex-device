@@ -25,6 +25,12 @@ class BluetoothDevice:
     protocol: str = "ems_v1"
     rssi: int = -48
     connected: bool = False
+    # Toy 协议设备会在连接后通过 0x10 设备信息包补齐这些能力字段。
+    product_id: int | None = None
+    product_version: int | None = None
+    motor_a_mode_count: int = 0
+    motor_b_mode_count: int = 0
+    motor_c_mode_count: int = 0
 
 
 @dataclass
@@ -57,12 +63,19 @@ class ToyWaveformStep:
 
     普通 Toy 使用 0-20 速度值；GCQ 灌肠机复用同一结构，
     但 motor_a 表示阀门开关，motor_b / motor_c 为 0-5 档。
+
+    control_mode 用于区分两类 Toy 指令：
+    - speed: 35 12 实时速率控制
+    - fixed_mode: 35 11 固定模式控制
     """
 
     duration_ms: int = 200
     motor_a: int = 0
     motor_b: int = 0
     motor_c: int = 0
+    control_mode: str = "speed"
+    fixed_mode: int = 0
+    motor_mask: int = 0
 
 
 @dataclass

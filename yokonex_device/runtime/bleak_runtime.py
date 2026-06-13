@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import secrets
 import time
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -11,6 +12,9 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from cryptography.hazmat.primitives.ciphers import Cipher
+from cryptography.hazmat.primitives.ciphers import algorithms
+from cryptography.hazmat.primitives.ciphers import modes
 from yokonex_device.models import BluetoothConnectionStatus
 from yokonex_device.models import BluetoothDevice
 from yokonex_device.models import EmsWaveform
@@ -37,10 +41,15 @@ TOY_NOTIFY_CHAR_UUID = "0000ff42-0000-1000-8000-00805f9b34fb"
 GCQ_TOY_SERVICE_UUID = "0000ff70-0000-1000-8000-00805f9b34fb"
 GCQ_TOY_WRITE_CHAR_UUID = "0000ff71-0000-1000-8000-00805f9b34fb"
 GCQ_TOY_NOTIFY_CHAR_UUID = "0000ff72-0000-1000-8000-00805f9b34fb"
+GCQ_AES_SERVICE_UUID = "0000ffb0-0000-1000-8000-00805f9b34fb"
+GCQ_AES_WRITE_CHAR_UUID = "0000ffb1-0000-1000-8000-00805f9b34fb"
+GCQ_AES_NOTIFY_CHAR_UUID = "0000ffb2-0000-1000-8000-00805f9b34fb"
 
 TOY_NAME_PREFIXES = ("YCY-FJB", "YCY-TDD")
 GCQ_TOY_PROTOCOL = "yiskj_gcq_toy_013"
+GCQ_AES_PROTOCOL = "yiskj_gcq_v1_aes"
 TOY_MOTOR_ALL = 0x07
+GCQ_AES_KEY = bytes.fromhex("F638BC9CFA477480AB3242F6B04557A1")
 
 LOGGER = logging.getLogger("bili_live.bluetooth.runtime")
 
@@ -158,7 +167,13 @@ class BleakBluetoothRuntime:
             connected=True,
             device_name=device.name,
             device_type=device.device_type,
+            protocol=device.protocol,
             battery_level=state.battery_level,
+            product_id=device.product_id,
+            product_version=device.product_version,
+            motor_a_mode_count=device.motor_a_mode_count,
+            motor_b_mode_count=device.motor_b_mode_count,
+            motor_c_mode_count=device.motor_c_mode_count,
         )
         return BluetoothConnectionStatus(
             connected=True,
@@ -243,6 +258,7 @@ class BleakBluetoothRuntime:
         is_toy_device = device.device_type == "toy"
         write_uuid = _resolve_write_uuid(device)
         history = list(state.overlay_payload["history"])
+        toy_uses_fixed_mode = False
         try:
             if is_toy_device:
                 for index, step in enumerate(waveform.steps, start=1):
@@ -254,13 +270,49 @@ class BleakBluetoothRuntime:
                     # motor_a 只表示气阀开关，motor_b/motor_c 直接表示气泵和水泵的 0-5 档位。
                     if device.protocol == GCQ_TOY_PROTOCOL:
                         packet = create_gcq_toy_packet(toy_step)
+                        overlay_motor_a = toy_step.motor_a
+                        overlay_motor_b = toy_step.motor_b
+                        overlay_motor_c = toy_step.motor_c
+                        control_mode = "speed"
+                        fixed_mode = 0
+                        motor_mask = 0
+                        packets = [packet]
+                    elif device.protocol == GCQ_AES_PROTOCOL:
+                        packets, overlay_motor_a, overlay_motor_b, overlay_motor_c = create_gcq_aes_packets(
+                            toy_step,
+                            device_family=getattr(waveform, "device_family", "toy"),
+                            duration_ms=max(getattr(step, "duration_ms", 200), 0),
+                        )
+                        control_mode = "pump_state"
+                        fixed_mode = 0
+                        motor_mask = 0x03
                     else:
-                        packet = create_toy_speed_packet(toy_step)
+                        control_mode = _resolve_toy_control_mode(toy_step)
+                        if control_mode == "fixed_mode":
+                            # FF40 协议下不同设备通过 0x10 上报马达和固定模式数量，
+                            # 这里统一走 0x11 指令，避免把仅支持固定模式的设备当成实时调速设备。
+                            packet = create_toy_fixed_mode_packet(toy_step)
+                            overlay_motor_a, overlay_motor_b, overlay_motor_c = _resolve_toy_fixed_mode_overlay_values(toy_step)
+                            fixed_mode = _clamp_toy_fixed_mode_index(toy_step.fixed_mode)
+                            motor_mask = _resolve_toy_motor_mask(toy_step)
+                            toy_uses_fixed_mode = True
+                            packets = [packet]
+                        else:
+                            packet = create_toy_speed_packet(toy_step)
+                            overlay_motor_a = toy_step.motor_a
+                            overlay_motor_b = toy_step.motor_b
+                            overlay_motor_c = toy_step.motor_c
+                            fixed_mode = 0
+                            motor_mask = 0
+                            packets = [packet]
                     history.append(
                         {
-                            "motor_a": toy_step.motor_a,
-                            "motor_b": toy_step.motor_b,
-                            "motor_c": toy_step.motor_c,
+                            "motor_a": overlay_motor_a,
+                            "motor_b": overlay_motor_b,
+                            "motor_c": overlay_motor_c,
+                            "control_mode": control_mode,
+                            "fixed_mode": fixed_mode,
+                            "motor_mask": motor_mask,
                         }
                     )
                     history = history[-90:]
@@ -269,16 +321,26 @@ class BleakBluetoothRuntime:
                         connected=True,
                         device_name=device.name,
                         device_type=device.device_type,
+                        protocol=device.protocol,
                         waveform_name=waveform.name,
                         battery_level=state.battery_level,
-                        motor_a=toy_step.motor_a,
-                        motor_b=toy_step.motor_b,
-                        motor_c=toy_step.motor_c,
+                        motor_a=overlay_motor_a,
+                        motor_b=overlay_motor_b,
+                        motor_c=overlay_motor_c,
+                        control_mode=control_mode,
+                        fixed_mode=fixed_mode,
+                        motor_mask=motor_mask,
                         step_index=index,
                         step_count=len(waveform.steps),
                         history=history,
+                        product_id=device.product_id,
+                        product_version=device.product_version,
+                        motor_a_mode_count=device.motor_a_mode_count,
+                        motor_b_mode_count=device.motor_b_mode_count,
+                        motor_c_mode_count=device.motor_c_mode_count,
                     )
-                    await state.client.write_gatt_char(write_uuid, packet, response=False)
+                    for packet in packets:
+                        await state.client.write_gatt_char(write_uuid, packet, response=False)
                     await self._sleep(max(getattr(step, "duration_ms", 200), 0) / 1000)
             else:
                 packets = create_waveform_packets(waveform=waveform, protocol=device.protocol)
@@ -295,6 +357,7 @@ class BleakBluetoothRuntime:
                         connected=True,
                         device_name=device.name,
                         device_type=device.device_type,
+                        protocol=device.protocol,
                         waveform_name=waveform.name,
                         battery_level=state.battery_level,
                         channel_a=getattr(step, "channel_a", 0),
@@ -302,12 +365,24 @@ class BleakBluetoothRuntime:
                         step_index=index,
                         step_count=len(waveform.steps),
                         history=history,
+                        product_id=device.product_id,
+                        product_version=device.product_version,
+                        motor_a_mode_count=device.motor_a_mode_count,
+                        motor_b_mode_count=device.motor_b_mode_count,
+                        motor_c_mode_count=device.motor_c_mode_count,
                     )
                     await state.client.write_gatt_char(write_uuid, packet, response=False)
                     await self._sleep(duration_seconds)
         finally:
             if is_toy_device:
-                stop_packet = create_gcq_toy_stop_packet() if device.protocol == GCQ_TOY_PROTOCOL else create_toy_stop_packet()
+                if device.protocol == GCQ_TOY_PROTOCOL:
+                    stop_packet = create_gcq_toy_stop_packet()
+                elif device.protocol == GCQ_AES_PROTOCOL:
+                    stop_packet = create_gcq_aes_stop_packet()
+                elif toy_uses_fixed_mode:
+                    stop_packet = create_toy_fixed_mode_stop_packet()
+                else:
+                    stop_packet = create_toy_stop_packet()
             else:
                 stop_packet = create_stop_packet(protocol=device.protocol)
             await state.client.write_gatt_char(write_uuid, stop_packet, response=False)
@@ -317,14 +392,23 @@ class BleakBluetoothRuntime:
                     connected=True,
                     device_name=device.name,
                     device_type=device.device_type,
+                    protocol=device.protocol,
                     waveform_name="",
                     battery_level=state.battery_level,
                     motor_a=0,
                     motor_b=0,
                     motor_c=0,
+                    control_mode="",
+                    fixed_mode=0,
+                    motor_mask=0,
                     step_index=0,
                     step_count=0,
-                    history=[*history, {"motor_a": 0, "motor_b": 0, "motor_c": 0}][-90:],
+                    history=[*history, {"motor_a": 0, "motor_b": 0, "motor_c": 0, "control_mode": "", "fixed_mode": 0, "motor_mask": 0}][-90:],
+                    product_id=device.product_id,
+                    product_version=device.product_version,
+                    motor_a_mode_count=device.motor_a_mode_count,
+                    motor_b_mode_count=device.motor_b_mode_count,
+                    motor_c_mode_count=device.motor_c_mode_count,
                 )
             else:
                 self._set_overlay_payload(
@@ -332,6 +416,7 @@ class BleakBluetoothRuntime:
                     connected=True,
                     device_name=device.name,
                     device_type=device.device_type,
+                    protocol=device.protocol,
                     waveform_name="",
                     battery_level=state.battery_level,
                     channel_a=0,
@@ -339,6 +424,11 @@ class BleakBluetoothRuntime:
                     step_index=0,
                     step_count=0,
                     history=[*history, {"channel_a": 0, "channel_b": 0}][-90:],
+                    product_id=device.product_id,
+                    product_version=device.product_version,
+                    motor_a_mode_count=device.motor_a_mode_count,
+                    motor_b_mode_count=device.motor_b_mode_count,
+                    motor_c_mode_count=device.motor_c_mode_count,
                 )
 
     def _handle_disconnect(self, device_id: str, _client: Any) -> None:
@@ -465,6 +555,27 @@ class BleakBluetoothRuntime:
         client = state.client
         if client is None or not getattr(client, "is_connected", False):
             return
+        if device.protocol == GCQ_AES_PROTOCOL:
+            start_notify = getattr(client, "start_notify", None)
+            if callable(start_notify):
+                await start_notify(
+                    GCQ_AES_NOTIFY_CHAR_UUID,
+                    lambda sender, data, target_device_id=device_id: self._dispatch_notify_callback(
+                        self._handle_gcq_aes_notify(target_device_id, sender, data),
+                    ),
+                )
+            # 按协议先主动查询当前双泵状态与电量，建立连接后即可同步到状态面板。
+            await client.write_gatt_char(
+                GCQ_AES_WRITE_CHAR_UUID,
+                _build_gcq_aes_status_query_packet(),
+                response=False,
+            )
+            await client.write_gatt_char(
+                GCQ_AES_WRITE_CHAR_UUID,
+                _build_gcq_aes_battery_query_packet(),
+                response=False,
+            )
+            return
         if device.protocol == GCQ_TOY_PROTOCOL:
             start_notify = getattr(client, "start_notify", None)
             if callable(start_notify):
@@ -547,7 +658,13 @@ class BleakBluetoothRuntime:
             connected=True,
             device_name=state.device.name,
             device_type=state.device.device_type,
+            protocol=state.device.protocol,
             battery_level=battery_level,
+            product_id=state.device.product_id,
+            product_version=state.device.product_version,
+            motor_a_mode_count=state.device.motor_a_mode_count,
+            motor_b_mode_count=state.device.motor_b_mode_count,
+            motor_c_mode_count=state.device.motor_c_mode_count,
         )
 
     async def _handle_toy_notify(self, device_id: str, _sender: Any, data: bytearray) -> None:
@@ -559,12 +676,25 @@ class BleakBluetoothRuntime:
             return
         if parsed.get("type") == "battery":
             state.battery_level = parsed["level"]
+        elif parsed.get("type") == "device_info":
+            # FF40 协议通过设备信息包上报产品和马达能力，后续上层可按这些能力决定展示与下发方式。
+            state.device.product_id = parsed.get("product_id")
+            state.device.product_version = parsed.get("product_version")
+            state.device.motor_a_mode_count = max(0, int(parsed.get("motor_a_mode_count", 0) or 0))
+            state.device.motor_b_mode_count = max(0, int(parsed.get("motor_b_mode_count", 0) or 0))
+            state.device.motor_c_mode_count = max(0, int(parsed.get("motor_c_mode_count", 0) or 0))
         self._set_overlay_payload(
             device_id,
             connected=True,
             device_name=state.device.name,
             device_type=state.device.device_type,
+            protocol=state.device.protocol,
             battery_level=state.battery_level,
+            product_id=state.device.product_id,
+            product_version=state.device.product_version,
+            motor_a_mode_count=state.device.motor_a_mode_count,
+            motor_b_mode_count=state.device.motor_b_mode_count,
+            motor_c_mode_count=state.device.motor_c_mode_count,
         )
 
     async def _handle_gcq_toy_notify(self, device_id: str, _sender: Any, data: bytearray) -> None:
@@ -578,7 +708,13 @@ class BleakBluetoothRuntime:
             "connected": True,
             "device_name": state.device.name,
             "device_type": state.device.device_type,
+            "protocol": state.device.protocol,
             "battery_level": state.battery_level,
+            "product_id": state.device.product_id,
+            "product_version": state.device.product_version,
+            "motor_a_mode_count": state.device.motor_a_mode_count,
+            "motor_b_mode_count": state.device.motor_b_mode_count,
+            "motor_c_mode_count": state.device.motor_c_mode_count,
         }
         if parsed.get("type") == "battery":
             state.battery_level = parsed["level"]
@@ -591,6 +727,36 @@ class BleakBluetoothRuntime:
                 updates["motor_a"] = 1 if parsed.get("valve_open", False) else 0
                 updates["motor_b"] = _clamp_gcq_level(parsed.get("air_pump_level", 0))
                 updates["motor_c"] = _clamp_gcq_level(parsed.get("water_pump_level", 0))
+        self._set_overlay_payload(device_id, **updates)
+
+    async def _handle_gcq_aes_notify(self, device_id: str, _sender: Any, data: bytearray) -> None:
+        parsed = _try_parse_gcq_aes_notify(bytes(data))
+        if parsed is None:
+            return
+        state = self._device_states.get(device_id)
+        if state is None:
+            return
+        updates: dict[str, Any] = {
+            "connected": True,
+            "device_name": state.device.name,
+            "device_type": state.device.device_type,
+            "protocol": state.device.protocol,
+            "battery_level": state.battery_level,
+            "product_id": state.device.product_id,
+            "product_version": state.device.product_version,
+            "motor_a_mode_count": state.device.motor_a_mode_count,
+            "motor_b_mode_count": state.device.motor_b_mode_count,
+            "motor_c_mode_count": state.device.motor_c_mode_count,
+        }
+        if parsed.get("type") == "battery":
+            state.battery_level = parsed["level"]
+            updates["battery_level"] = state.battery_level
+        elif parsed.get("type") == "status":
+            updates["motor_a"] = _clamp_gcq_aes_peristaltic_state(parsed.get("peristaltic_state", 0))
+            updates["motor_b"] = _clamp_gcq_aes_water_state(parsed.get("water_state", 0))
+        elif parsed.get("type") == "pressure":
+            updates["pressure_a"] = _clamp_pressure_value(parsed.get("pressure_a", 0))
+            updates["pressure_b"] = _clamp_pressure_value(parsed.get("pressure_b", 0))
         self._set_overlay_payload(device_id, **updates)
 
     async def _run_gcq_toy_heartbeat(self, device_id: str) -> None:
@@ -640,8 +806,19 @@ class BleakBluetoothRuntime:
             "connected": False,
             "device_name": "",
             "device_type": "",
+            "protocol": "",
+            "product_id": None,
+            "product_version": None,
+            "motor_a_mode_count": 0,
+            "motor_b_mode_count": 0,
+            "motor_c_mode_count": 0,
             "waveform_name": "",
             "battery_level": None,
+            "control_mode": "",
+            "fixed_mode": 0,
+            "motor_mask": 0,
+            "pressure_a": 0,
+            "pressure_b": 0,
             "channel_a": 0,
             "channel_b": 0,
             "motor_a": 0,
@@ -669,6 +846,16 @@ def classify_device(*, ble_device: Any, advertisement: Any) -> BluetoothDevice |
         or getattr(ble_device, "address", "")
     )
     name_upper = str(name).upper()
+
+    if GCQ_AES_SERVICE_UUID in service_uuids:
+        return BluetoothDevice(
+            device_id=str(getattr(ble_device, "address", "")),
+            name=str(name),
+            device_type="toy",
+            protocol=GCQ_AES_PROTOCOL,
+            rssi=int(getattr(ble_device, "rssi", getattr(advertisement, "rssi", -60)) or -60),
+            connected=False,
+        )
 
     if GCQ_TOY_SERVICE_UUID in service_uuids:
         return BluetoothDevice(
@@ -853,6 +1040,10 @@ def _extract_service_uuids_from_services(services: Any) -> set[str]:
 
 
 def _apply_connected_service_profile(device: BluetoothDevice, service_uuids: set[str]) -> BluetoothDevice:
+    if GCQ_AES_SERVICE_UUID in service_uuids:
+        device.device_type = "toy"
+        device.protocol = GCQ_AES_PROTOCOL
+        return device
     if GCQ_TOY_SERVICE_UUID in service_uuids:
         device.device_type = "toy"
         device.protocol = GCQ_TOY_PROTOCOL
@@ -912,6 +1103,13 @@ def create_toy_speed_packet(step: ToyWaveformStep) -> bytes:
     return bytes(values)
 
 
+def create_toy_fixed_mode_packet(step: ToyWaveformStep) -> bytes:
+    """构建 Toy 固定模式控制包 35 11 motor_mask fixed_mode checksum。"""
+    values = [0x35, 0x11, _resolve_toy_motor_mask(step), _clamp_toy_fixed_mode_index(step.fixed_mode)]
+    values.append(_compute_checksum(values))
+    return bytes(values)
+
+
 def create_gcq_toy_packet(step: ToyWaveformStep) -> bytes:
     """构建灌肠机实时控制包 35 12 valve air_pump water_pump checksum。"""
     values = [
@@ -930,9 +1128,39 @@ def create_toy_stop_packet() -> bytes:
     return create_toy_speed_packet(ToyWaveformStep())
 
 
+def create_toy_fixed_mode_stop_packet() -> bytes:
+    """构建 Toy 固定模式停止包，关闭所有马达固定模式。"""
+    return create_toy_fixed_mode_packet(ToyWaveformStep(control_mode="fixed_mode", fixed_mode=0, motor_mask=TOY_MOTOR_ALL))
+
+
 def create_gcq_toy_stop_packet() -> bytes:
     """构建灌肠机停止包，关闭气阀、气泵和水泵。"""
     return create_gcq_toy_packet(ToyWaveformStep())
+
+
+def create_gcq_aes_packets(step: ToyWaveformStep, *, device_family: str, duration_ms: int) -> tuple[list[bytes], int, int, int]:
+    """构建 FFB0 灌肠机一代协议的双泵控制包。"""
+    seconds = _clamp_gcq_aes_duration_seconds(duration_ms)
+    family = str(device_family or "toy").strip().lower()
+    if family == "gcq_aes":
+        peristaltic_state = _clamp_gcq_aes_peristaltic_state(step.motor_a)
+        water_state = _clamp_gcq_aes_water_state(step.motor_b)
+    elif family == "gcq":
+        peristaltic_state = 1 if int(step.motor_b) > 0 else 0
+        water_state = 1 if int(step.motor_c) > 0 else 0
+    else:
+        peristaltic_state = 1 if int(step.motor_a) > 0 else 0
+        water_state = 1 if int(step.motor_b) > 0 else 0
+    packets = [
+        _build_gcq_aes_pump_command_packet(command=0x01, state=peristaltic_state, seconds=seconds),
+        _build_gcq_aes_pump_command_packet(command=0x02, state=water_state, seconds=seconds),
+    ]
+    return packets, peristaltic_state, water_state, 0
+
+
+def create_gcq_aes_stop_packet() -> bytes:
+    """构建 FFB0 灌肠机一代协议的全停指令。"""
+    return _build_gcq_aes_simple_command_packet(0x03)
 
 
 def _build_toy_device_info_query() -> bytes:
@@ -960,8 +1188,99 @@ def _build_gcq_toy_heartbeat_packet() -> bytes:
     return bytes(values)
 
 
+def _build_gcq_aes_pump_command_packet(*, command: int, state: int, seconds: int, filler: bytes | None = None) -> bytes:
+    plaintext = _build_gcq_aes_plaintext(
+        0xA0,
+        command,
+        bytes([max(0, min(int(state), 0xFF)), _high(seconds), _low(seconds)]),
+        filler=filler,
+    )
+    return _encrypt_gcq_aes_packet(plaintext)
+
+
+def _build_gcq_aes_simple_command_packet(command: int, filler: bytes | None = None) -> bytes:
+    plaintext = _build_gcq_aes_plaintext(0xA0, command, b"", filler=filler)
+    return _encrypt_gcq_aes_packet(plaintext)
+
+
+def _build_gcq_aes_status_query_packet() -> bytes:
+    return _build_gcq_aes_simple_command_packet(0x04)
+
+
+def _build_gcq_aes_battery_query_packet() -> bytes:
+    return _build_gcq_aes_simple_command_packet(0x05)
+
+
+def _build_gcq_aes_plaintext(prefix: int, command: int, payload: bytes, *, filler: bytes | None = None) -> bytes:
+    header = bytes([0xBF, 0x0F, max(0, min(int(prefix), 0xFF)), max(0, min(int(command), 0xFF))])
+    normalized_payload = bytes(payload or b"")
+    pad_length = 16 - len(header) - len(normalized_payload)
+    if pad_length < 0:
+        raise ValueError("GCQ AES 指令长度超出 16 字节限制")
+    random_filler = filler if filler is not None else secrets.token_bytes(pad_length)
+    random_filler = bytes(random_filler[:pad_length]).ljust(pad_length, b"\x00")
+    return header + normalized_payload + random_filler
+
+
+def _encrypt_gcq_aes_packet(plaintext: bytes) -> bytes:
+    if len(plaintext) != 16:
+        raise ValueError("GCQ AES 明文长度必须为 16 字节")
+    cipher = Cipher(algorithms.AES(GCQ_AES_KEY), modes.ECB())
+    encryptor = cipher.encryptor()
+    return encryptor.update(plaintext) + encryptor.finalize()
+
+
+def _decrypt_gcq_aes_packet(ciphertext: bytes) -> bytes | None:
+    if len(ciphertext) != 16:
+        return None
+    cipher = Cipher(algorithms.AES(GCQ_AES_KEY), modes.ECB())
+    decryptor = cipher.decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
 def _clamp_toy_speed(value: int) -> int:
     return max(0, min(int(value), 20))
+
+
+def _clamp_toy_fixed_mode_index(value: int) -> int:
+    return max(0, min(int(value), 255))
+
+
+def _clamp_toy_motor_mask(value: int) -> int:
+    return max(0, min(int(value), TOY_MOTOR_ALL))
+
+
+def _resolve_toy_control_mode(step: ToyWaveformStep) -> str:
+    normalized = str(getattr(step, "control_mode", "") or "").strip().lower()
+    if normalized in {"fixed", "fixed_mode", "mode", "pattern"}:
+        return "fixed_mode"
+    if _clamp_toy_fixed_mode_index(getattr(step, "fixed_mode", 0)) > 0:
+        return "fixed_mode"
+    return "speed"
+
+
+def _resolve_toy_motor_mask(step: ToyWaveformStep) -> int:
+    raw_mask = _clamp_toy_motor_mask(getattr(step, "motor_mask", 0))
+    if raw_mask > 0:
+        return raw_mask
+    derived_mask = 0
+    if int(getattr(step, "motor_a", 0) or 0) > 0:
+        derived_mask |= 0x01
+    if int(getattr(step, "motor_b", 0) or 0) > 0:
+        derived_mask |= 0x02
+    if int(getattr(step, "motor_c", 0) or 0) > 0:
+        derived_mask |= 0x04
+    return derived_mask or TOY_MOTOR_ALL
+
+
+def _resolve_toy_fixed_mode_overlay_values(step: ToyWaveformStep) -> tuple[int, int, int]:
+    mode_value = max(1, min(_clamp_toy_fixed_mode_index(step.fixed_mode), 20))
+    motor_mask = _resolve_toy_motor_mask(step)
+    return (
+        mode_value if motor_mask & 0x01 else 0,
+        mode_value if motor_mask & 0x02 else 0,
+        mode_value if motor_mask & 0x04 else 0,
+    )
 
 
 def _clamp_gcq_valve_state(value: int) -> int:
@@ -970,6 +1289,22 @@ def _clamp_gcq_valve_state(value: int) -> int:
 
 def _clamp_gcq_level(value: int) -> int:
     return max(0, min(int(value), 5))
+
+
+def _clamp_gcq_aes_peristaltic_state(value: int) -> int:
+    return max(0, min(int(value), 2))
+
+
+def _clamp_gcq_aes_water_state(value: int) -> int:
+    return max(0, min(int(value), 1))
+
+
+def _clamp_gcq_aes_duration_seconds(duration_ms: int) -> int:
+    return max(0, min(int(round(max(0, int(duration_ms)) / 1000)), 0xFFFF))
+
+
+def _clamp_pressure_value(value: Any) -> int:
+    return max(0, min(int(value), 0xFFFF))
 
 
 def _ems_step_to_toy(step: EmsWaveformStep) -> ToyWaveformStep:
@@ -994,12 +1329,41 @@ def _try_parse_toy_notify(data: bytes) -> dict | None:
     if cmd == 0x10 and len(data) >= 10:
         return {
             "type": "device_info",
-            "motor_a_modes": data[4],
-            "motor_b_modes": data[5],
-            "motor_c_modes": data[6],
+            "product_id": int(data[2]),
+            "product_version": int(data[3]),
+            "motor_a_mode_count": int(data[4]),
+            "motor_b_mode_count": int(data[5]),
+            "motor_c_mode_count": int(data[6]),
         }
     if cmd == 0x14:
         return {"type": "heartbeat"}
+    return None
+
+
+def _try_parse_gcq_aes_notify(data: bytes) -> dict | None:
+    plaintext = _decrypt_gcq_aes_packet(data)
+    if plaintext is None or len(plaintext) != 16:
+        return None
+    if plaintext[0] != 0xBF or plaintext[1] != 0x0F or plaintext[2] != 0xB0:
+        return None
+    command = plaintext[3]
+    if command == 0x01:
+        return {
+            "type": "status",
+            "peristaltic_state": _clamp_gcq_aes_peristaltic_state(plaintext[4]),
+            "water_state": _clamp_gcq_aes_water_state(plaintext[5]),
+        }
+    if command == 0x02:
+        return {
+            "type": "pressure",
+            "pressure_a": (int(plaintext[4]) << 8) | int(plaintext[5]),
+            "pressure_b": (int(plaintext[6]) << 8) | int(plaintext[7]),
+        }
+    if command == 0x03:
+        return {
+            "type": "battery",
+            "level": max(0, min(int(plaintext[4]), 100)),
+        }
     return None
 
 
@@ -1028,6 +1392,8 @@ def _try_parse_gcq_toy_notify(data: bytes) -> dict | None:
 
 
 def _resolve_write_uuid(device: BluetoothDevice) -> str:
+    if device.protocol == GCQ_AES_PROTOCOL:
+        return GCQ_AES_WRITE_CHAR_UUID
     if device.protocol == GCQ_TOY_PROTOCOL:
         return GCQ_TOY_WRITE_CHAR_UUID
     if device.device_type == "toy":
@@ -1036,6 +1402,8 @@ def _resolve_write_uuid(device: BluetoothDevice) -> str:
 
 
 def _resolve_notify_uuid(device: BluetoothDevice) -> str:
+    if device.protocol == GCQ_AES_PROTOCOL:
+        return GCQ_AES_NOTIFY_CHAR_UUID
     if device.protocol == GCQ_TOY_PROTOCOL:
         return GCQ_TOY_NOTIFY_CHAR_UUID
     if device.device_type == "toy":
